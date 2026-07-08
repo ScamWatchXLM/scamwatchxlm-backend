@@ -1,0 +1,330 @@
+// ScamWatchXLM — Prisma schema
+// Intelligence engine for scam detection on the Stellar network.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum EntityType {
+  ACCOUNT
+  ASSET
+  ISSUER
+  TRANSACTION
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWING
+  CONFIRMED
+  REJECTED
+}
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+}
+
+enum NotificationChannel {
+  DISCORD
+  SLACK
+  EMAIL
+  WEBHOOK
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum HorizonEventType {
+  ACCOUNT_CREATED
+  TRUSTLINE_CREATED
+  TRUSTLINE_REMOVED
+  PAYMENT
+  PATH_PAYMENT
+  ASSET_ISSUANCE
+  OFFER_CREATED
+  ACCOUNT_MERGE
+  SIGNER_CHANGE
+  THRESHOLD_CHANGE
+}
+
+// ---------------------------------------------------------------------------
+// Core Stellar entities
+// ---------------------------------------------------------------------------
+
+model Account {
+  id             String   @id @default(cuid())
+  publicKey      String   @unique
+  createdAtLedger Int?
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @updatedAt
+  homeDomain     String?
+  isFunded       Boolean  @default(true)
+  isFlagged      Boolean  @default(false)
+  metadata       Json?
+
+  riskScores     RiskScore[]
+  alerts         Alert[]
+  reports        Report[]         @relation("ReportedAccount")
+  events         HorizonEvent[]   @relation("SourceAccount")
+  issuedAssets   Asset[]          @relation("AssetIssuer")
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([isFlagged])
+  @@index([firstSeenAt])
+}
+
+model Asset {
+  id            String   @id @default(cuid())
+  code          String
+  issuer        String
+  issuerAccount Account? @relation("AssetIssuer", fields: [issuer], references: [publicKey])
+  assetType     String   @default("credit_alphanum4")
+  isFlagged     Boolean  @default(false)
+  metadata      Json?
+
+  riskScores    RiskScore[]
+  alerts        Alert[]
+  reports       Report[]     @relation("ReportedAsset")
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([code, issuer])
+  @@index([issuer])
+  @@index([isFlagged])
+}
+
+model HorizonEvent {
+  id              String           @id @default(cuid())
+  type            HorizonEventType
+  ledger          Int
+  txHash          String
+  opIndex         Int              @default(0)
+  sourceAccountId String?
+  sourceAccount   Account?         @relation("SourceAccount", fields: [sourceAccountId], references: [id])
+  raw             Json
+  processedAt     DateTime?
+  createdAt       DateTime         @default(now())
+
+  @@unique([txHash, opIndex])
+  @@index([type])
+  @@index([ledger])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Risk scoring
+// ---------------------------------------------------------------------------
+
+model RiskScore {
+  id          String     @id @default(cuid())
+  entityType  EntityType
+  entityId    String
+  accountId   String?
+  account     Account?   @relation(fields: [accountId], references: [id])
+  assetId     String?
+  asset       Asset?     @relation(fields: [assetId], references: [id])
+
+  score       Int
+  severity    Severity
+  confidence  Float
+  reasons     Json
+  detector    String
+
+  createdAt   DateTime   @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([severity])
+}
+
+// ---------------------------------------------------------------------------
+// Detections / Alerts
+// ---------------------------------------------------------------------------
+
+model Detection {
+  id           String     @id @default(cuid())
+  detectorName String
+  entityType   EntityType
+  entityId     String
+  severity     Severity
+  confidence   Float
+  reasons      Json
+  evidence     Json?
+  dedupeKey    String     @unique
+  alert        Alert?
+
+  createdAt    DateTime   @default(now())
+
+  @@index([detectorName])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Alert {
+  id           String      @id @default(cuid())
+  title        String
+  description  String
+  severity     Severity
+  status       AlertStatus @default(OPEN)
+  entityType   EntityType
+  entityId     String
+  accountId    String?
+  account      Account?    @relation(fields: [accountId], references: [id])
+  assetId      String?
+  asset        Asset?      @relation(fields: [assetId], references: [id])
+  detectionId  String?     @unique
+  detection    Detection?  @relation(fields: [detectionId], references: [id])
+
+  notifications Notification[]
+
+  acknowledgedAt DateTime?
+  resolvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status])
+  @@index([severity])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Community reports
+// ---------------------------------------------------------------------------
+
+model Report {
+  id            String       @id @default(cuid())
+  reporterId    String?
+  reporter      User?        @relation(fields: [reporterId], references: [id])
+  reporterEmail String?
+  category      String
+  description   String
+  evidenceUrls  String[]     @default([])
+  status        ReportStatus @default(PENDING)
+
+  accountId     String?
+  account       Account?     @relation("ReportedAccount", fields: [accountId], references: [id])
+  assetId       String?
+  asset         Asset?       @relation("ReportedAsset", fields: [assetId], references: [id])
+  targetAddress String?
+
+  reviewedById  String?
+  reviewedBy    User?        @relation("ReviewedReports", fields: [reviewedById], references: [id])
+  reviewNotes   String?
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([status])
+  @@index([accountId])
+  @@index([assetId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id        String              @id @default(cuid())
+  alertId   String
+  alert     Alert               @relation(fields: [alertId], references: [id])
+  channel   NotificationChannel
+  target    String?
+  status    NotificationStatus  @default(PENDING)
+  attempts  Int                 @default(0)
+  lastError String?
+  sentAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  @@index([status])
+  @@index([channel])
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  role          UserRole  @default(USER)
+  isActive      Boolean   @default(true)
+
+  apiKeys       ApiKey[]
+  reports       Report[]
+  reviewedReports Report[] @relation("ReviewedReports")
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([role])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  name       String
+  keyHash    String    @unique
+  keyPrefix  String
+  userId     String
+  user       User      @relation(fields: [userId], references: [id])
+  scopes     String[]  @default([])
+  isActive   Boolean   @default(true)
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([keyPrefix])
+}
+
+// ---------------------------------------------------------------------------
+// Analytics / stats snapshots
+// ---------------------------------------------------------------------------
+
+model StatsSnapshot {
+  id            String   @id @default(cuid())
+  period        String
+  totalAlerts   Int
+  totalReports  Int
+  totalDetections Int
+  flaggedAccounts Int
+  flaggedAssets   Int
+  bySeverity    Json
+  byDetector    Json
+  createdAt     DateTime @default(now())
+
+  @@index([period])
+  @@index([createdAt])
+}

@@ -1,0 +1,75 @@
+name: scamwatchxlm
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scamwatch
+      POSTGRES_PASSWORD: scamwatch
+      POSTGRES_DB: scamwatchxlm
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U scamwatch -d scamwatchxlm']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://scamwatch:scamwatch@postgres:5432/scamwatchxlm?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-string}
+      HORIZON_URL: ${HORIZON_URL:-https://horizon-testnet.stellar.org}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+    ports:
+      - '3000:3000'
+    command: sh -c "npx prisma migrate deploy && node dist/index.js"
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://scamwatch:scamwatch@postgres:5432/scamwatchxlm?schema=public
+      REDIS_URL: redis://redis:6379
+      HORIZON_URL: ${HORIZON_URL:-https://horizon-testnet.stellar.org}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-testnet}
+    command: node dist/workers/index.js
+
+volumes:
+  postgres_data:
+  redis_data:
