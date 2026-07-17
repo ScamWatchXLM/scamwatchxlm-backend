@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
 
-import { QUEUE_NAMES } from '../config/constants.js';
+import { QUEUE_NAMES, RISK_DECAY_LOOKBACK_MS } from '../config/constants.js';
 import { env } from '../config/env.js';
 import { childLogger } from '../config/logger.js';
 import { prisma } from '../db/prisma.js';
@@ -34,16 +34,22 @@ export function createRiskRecalculationWorker(): Worker<RiskRecalculationJobData
       });
 
       let recalculated = 0;
+      const lookbackStart = new Date(Date.now() - RISK_DECAY_LOOKBACK_MS);
 
       for (const account of flaggedAccounts) {
         const recentDetections = await prisma.detection.findMany({
-          where: { entityType: 'ACCOUNT', entityId: account.publicKey },
+          where: {
+            entityType: 'ACCOUNT',
+            entityId: account.publicKey,
+            createdAt: { gte: lookbackStart },
+          },
           orderBy: { createdAt: 'desc' },
           take: 20,
         });
-        if (recentDetections.length === 0) continue;
 
         const previousScore = await history.getLatestScore('ACCOUNT', account.publicKey);
+        if (recentDetections.length === 0 && previousScore == null) continue;
+
         const result = scorer.score({
           entityType: 'ACCOUNT',
           entityId: account.publicKey,
@@ -65,13 +71,18 @@ export function createRiskRecalculationWorker(): Worker<RiskRecalculationJobData
       for (const asset of flaggedAssets) {
         const entityId = `${asset.code}:${asset.issuer}`;
         const recentDetections = await prisma.detection.findMany({
-          where: { entityType: 'ASSET', entityId },
+          where: {
+            entityType: 'ASSET',
+            entityId,
+            createdAt: { gte: lookbackStart },
+          },
           orderBy: { createdAt: 'desc' },
           take: 20,
         });
-        if (recentDetections.length === 0) continue;
 
         const previousScore = await history.getLatestScore('ASSET', entityId);
+        if (recentDetections.length === 0 && previousScore == null) continue;
+
         const result = scorer.score({
           entityType: 'ASSET',
           entityId,

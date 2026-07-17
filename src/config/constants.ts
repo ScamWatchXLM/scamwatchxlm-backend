@@ -44,3 +44,6 @@ export const MEMO_SPAM_REPEAT_THRESHOLD = 8;
 export const LARGE_TRANSFER_AMOUNT = 50_000;
 export const COORDINATED_TRANSFER_WINDOW_MS = 15 * 60 * 1000;
 export const COORDINATED_TRANSFER_MIN_PARTICIPANTS = 4;
+
+/** Detections older than this no longer count towards a flagged entity's live risk score. */
+export const RISK_DECAY_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
