@@ -16,13 +16,18 @@ export function createAlertCleanupWorker(): Worker<AlertCleanupJobData> {
     async (job) => {
       const retentionDays = job.data.retentionDays ?? env.ALERT_RETENTION_DAYS;
       const cutoff = new Date(Date.now() - retentionDays * 86_400_000);
+      const where = {
+        status: { in: ['RESOLVED' as const, 'DISMISSED' as const] },
+        updatedAt: { lt: cutoff },
+      };
 
-      const result = await prisma.alert.deleteMany({
-        where: {
-          status: { in: ['RESOLVED', 'DISMISSED'] },
-          updatedAt: { lt: cutoff },
-        },
-      });
+      // Notification.alertId is ON DELETE RESTRICT, and every dispatched alert has at
+      // least one Notification row, so deleting the alerts directly would violate the FK
+      // constraint and abort the whole batch. Clear their notifications first.
+      const [, result] = await prisma.$transaction([
+        prisma.notification.deleteMany({ where: { alert: where } }),
+        prisma.alert.deleteMany({ where }),
+      ]);
 
       log.info({ jobId: job.id, deleted: result.count, cutoff }, 'Alert cleanup complete');
     },
