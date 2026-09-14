@@ -28,7 +28,14 @@ export class CoordinatedTransfersDetector extends BaseDetector {
 
     const windowStart = new Date(Date.now() - COORDINATED_TRANSFER_WINDOW_MS);
     const recentLargeTransfers = await ctx.prisma.horizonEvent.findMany({
-      where: { type: 'PAYMENT', createdAt: { gte: windowStart } },
+      where: {
+        type: 'PAYMENT',
+        createdAt: { gte: windowStart },
+        // The triggering payment is persisted before detectors run, so it would otherwise
+        // show up in this query too and get double-counted below (seeded once into
+        // `clusterVolume`/`participants`, then added again from this result set).
+        NOT: { txHash: event.txHash, opIndex: event.opIndex },
+      },
       select: { raw: true },
       take: 1000,
     });
